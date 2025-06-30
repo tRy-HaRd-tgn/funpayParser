@@ -1,1 +1,0 @@
-category;title;description;price;currency;lot_url;images
