@@ -21,6 +21,9 @@ const DEFAULT_HEADERS = {
   "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
 };
 
+// Будет обновлён после разбора флагов
+let acceptLangHeader = DEFAULT_HEADERS["Accept-Language"];
+
 /**
  * Sleep helper
  * @param {number} ms
@@ -90,6 +93,12 @@ for (let i = 0; i < args.length; i += 1) {
     uploadImages = true;
   } else if (a === "--lang" || a === "-l") {
     langFilter = (args[++i] || "").toLowerCase();
+    // обновляем заголовок Accept-Language
+    if (langFilter === "en") {
+      acceptLangHeader = "en-US,en;q=0.9";
+    } else if (langFilter === "ru") {
+      acceptLangHeader = "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7";
+    }
   } else if (a === "--upload-images") {
     uploadImages = true;
   } else if (a === "--verbose" || a === "-v") {
@@ -101,6 +110,9 @@ for (let i = 0; i < args.length; i += 1) {
     targetUrls.push(a);
   }
 }
+
+// применяем заголовок Accept-Language для всех запросов
+axios.defaults.headers.common["Accept-Language"] = acceptLangHeader;
 
 // ---------- Каталог изображений ----------
 const IMG_DIR = path.resolve(__dirname, "imgs");
