@@ -537,14 +537,26 @@ async function crawl() {
   const ws = fs.createWriteStream(outputPath, { encoding: "utf8" });
   writeHeader(ws);
 
+  // Глобальный счётчик реально ЗАПИСАННЫХ (попавших в CSV) лотов
+  let totalSaved = 0;
+
   for (const { name, url } of categories) {
+    // Множество уже обработанных лотов (по ссылке на лот, либо по заголовку, если ссылки нет)
+    /** @type {Set<string>} */
+    const seenLots = new Set();
     console.log(`\n[CAT] ${name} → ${url}`);
     let page = 1;
+    // URL, который переопределяет переход на следующую страницу (исп. кнопка «Показать ещё»)
+    let nextUrlOverride = null;
+
     while (true) {
       const pageUrl =
-        page === 1
+        nextUrlOverride ||
+        (page === 1
           ? url
-          : url + (url.includes("?") ? "&" : "?") + `page=${page}`;
+          : url + (url.includes("?") ? "&" : "?") + `page=${page}`);
+      // сбрасываем override, чтобы применился только для ОДНОГО перехода
+      nextUrlOverride = null;
       let $;
       try {
         $ = await getPage(pageUrl);
@@ -553,11 +565,31 @@ async function crawl() {
         break;
       }
       const lots = parseLots($, name);
+      // Если на странице не найдено лотов – конец пагинации
       if (!lots.length) {
         console.log(`  » страница ${page}: лоты не найдены (селектор)`);
         break; // конец пагинации
       }
+
+      // -------- обнаружение повтора первой страницы (FunPay после последней страницы снова отдаёт первую) --------
+      const firstLotKey = lots[0].lot_url || lots[0].title;
+      if (page > 1 && seenLots.has(firstLotKey)) {
+        console.log(
+          `  » страница ${page}: распознана как повтор первой страницы – останавливаем обход`
+        );
+        break;
+      }
+
+      // Счётчик записанных лотов на текущей странице
+      let savedOnPage = 0;
+
       for (const lot of lots) {
+        // пропускаем уже записанные лоты (по ссылке или заголовку)
+        const lotKey = lot.lot_url || lot.title;
+        if (seenLots.has(lotKey)) continue;
+
+        // помечаем лот как обработанный
+        seenLots.add(lotKey);
         // -------- фильтр по языку (если указан) --------
         if (langFilter) {
           const txt = `${lot.title} ${lot.description}`;
@@ -568,11 +600,13 @@ async function crawl() {
             continue; // пропускаем неподходящий язык
           }
         }
-        // фильтр по цене
+        // --- фильтр по цене: нужны лоты ДОРЖЕ 2 € ---
         const numPrice = priceToNumber(lot.price);
         const cur = lot.currency;
-        if (cur.includes("€") && numPrice <= 2) continue;
-        if (/₽|руб/i.test(cur) && numPrice <= 180) continue;
+        const EUR_THRESHOLD = 2;
+        if (cur.includes("€") && numPrice <= EUR_THRESHOLD) continue;
+        if (/₽|руб/i.test(cur) && numPrice * rubEurRate <= EUR_THRESHOLD)
+          continue;
 
         // конвертируем ₽ → € при необходимости
         if (/₽|руб/i.test(cur) && Number.isFinite(numPrice)) {
@@ -675,15 +709,29 @@ async function crawl() {
           }
         }
         writeLot(ws, lot);
+        savedOnPage += 1;
+        totalSaved += 1;
       }
-      console.log(`  » страница ${page}: записано ${lots.length} лотов`);
+      console.log(
+        `  » страница ${page}: сохранено ${savedOnPage} лотов (всего ${totalSaved})`
+      );
+
+      // --- ищем кнопку «Показать ещё» (или похожую) ---
+      const loadMore = $("button[data-url]").first();
+      const dataUrl = loadMore.attr("data-url")?.trim();
+      if (dataUrl) {
+        nextUrlOverride = new URL(dataUrl, BASE_URL).toString();
+        if (verbose) console.log(`  [+] loadMore → ${nextUrlOverride}`);
+      }
+
       page += 1;
       const delay = Math.random() * (delayMax - delayMin) + delayMin;
       await sleep(delay);
     }
   }
   ws.end();
-  console.log(`\nГотово. Txt сохранён в ${outputPath}`);
+  console.log(`\nВсего сохранено лотов: ${totalSaved}`);
+  console.log(`Готово. Txt сохранён в ${outputPath}`);
 }
 
 crawl().catch((err) => {
